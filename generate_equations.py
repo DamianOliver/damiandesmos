@@ -45,6 +45,13 @@ class Manager:
                     cluster.points.append([int(num) / self.image_size[i] for i, num in enumerate(position.split(','))])
                 self.clusters.append(cluster)
 
+    def load_models(self, path):
+        for i in range(len(self.clusters)):
+            file_path = path + "/model" + str(i) + ".pkl"
+            print("file path:", file_path)
+            self.models.append(pickle.load(open(file_path, 'rb')))
+            
+
     def recreate_image(self):
         image = np.zeros((self.image_size[0], self.image_size[1], 3))
         for cluster in self.clusters:
@@ -52,17 +59,14 @@ class Manager:
                 image[int(point[0] * self.image_size[0]) - 1][int(point[1] * self.image_size[1]) - 1] = cluster.color
         return image
     
-    def load_dimensions(self):
+    def load_dimensions(self, path):
         dimensions = []
-        with open('wolf_models/dimensions', 'r') as dimension_file:
+        with open(path + '/dimensions', 'r') as dimension_file:
             dimensions_str = dimension_file.read()
             for saved_dimension in dimensions_str.split():
-                print("read saved dimension of {}".format(saved_dimension))
                 dimension = []
                 for i, num in enumerate(saved_dimension.split(',')):
-                    print("num is {} and after conversion {}".format(num, int(float(num) * self.image_size[i>=2])))
                     dimension.append(int(float(num) * self.image_size[i>=2]))
-                print("appending", dimension)
                 dimensions.append(dimension)
         self.dimensions = dimensions
             
@@ -81,9 +85,9 @@ class Manager:
 
         exc_x = list(filter(lambda point: point[0] > min_include_0 and point[0] < max_include_0 and point[1] > min_include_1 and point[1] < max_include_1, exc_x))
 
-        plt.subplot(2, 1, 1)
-        plt.scatter([point[0] for point in inc_x], [point[1] for point in inc_x], marker='o')
-        plt.scatter([point[0] for point in exc_x], [point[1] for point in exc_x], marker='x')
+        # plt.subplot(2, 1, 1)
+        # plt.scatter([point[0] for point in inc_x], [point[1] for point in inc_x], marker='o')
+        # plt.scatter([point[0] for point in exc_x], [point[1] for point in exc_x], marker='x')
 
         x = inc_x + exc_x
         y += [1] * len(inc_x)
@@ -100,6 +104,13 @@ class Manager:
             curr_time = timeit.default_timer()
             print("completed equation {} at time {:2f}. Expected completion in {:2f}".format(i, (curr_time - time) / 60, ((curr_time - time) / (i + 1) * (len(self.clusters) - i)) / 60))
     
+    def generate_dimensions(self, cluster):
+        min_include_0 = min(cluster.points, key=lambda x: x[0])[0] - 0.1
+        max_include_0 = max(cluster.points, key=lambda x: x[0])[0] + 0.1
+        min_include_1 = min(cluster.points, key=lambda x: x[1])[1] - 0.1
+        max_include_1 = max(cluster.points, key=lambda x: x[1])[1] + 0.1
+        return [min_include_0, max_include_0, min_include_1, max_include_1]
+
     def fit_equation(self, included_clusters, excluded_clusters):
         plt.figure(figsize=(20, 20))
         x_train, y_train = self.create_train_and_label(included_clusters, excluded_clusters)
@@ -113,34 +124,15 @@ class Manager:
         self.parameters.append(self.correct_scikit_names(poly.get_feature_names_out()))
         print("fit with score of", model.score(x_poly, y_train), "and parameters of", model.coef_)
 
-    def fit_equation_tf(self, included_clusters, excluded_clusters):
-        plt.figure(figsize=(20, 20))
-        x_train, y_train = self.create_train_and_label(included_clusters, excluded_clusters)
-    
-        model = tf.keras.Sequential()
-        model.add(tf.keras.layers.Input(shape=(2,)))
-        model.add(tf.keras.layers.Dense(10, activation=tf.nn.relu))
-        model.add(tf.keras.layers.Dense(20, activation=tf.nn.relu))
-        model.add(tf.keras.layers.Dense(30, activation=tf.nn.relu))
-        model.add(tf.keras.layers.Dense(20, activation=tf.nn.relu))
-        model.add(tf.keras.layers.Dense(10, activation=tf.nn.relu))
-        model.add(tf.keras.layers.Dense(1, activation=tf.nn.sigmoid))
-
-        optimizer = Adam(learning_rate=0.001)
-        model.compile(loss='binary_crossentropy', optimizer=optimizer)
-        model.fit(x_train, y_train, epochs=1000)
-
-        self.test_model_tf(model)
-
-
     def fit_model(self, included_clusters, excluded_clusters):
         x_train, y_train, dimensions = self.create_train_and_label(included_clusters, excluded_clusters, 1, 2)
+        test_dimensions = [dimensions[i] * self.image_size[i>=2] for i in range(4)]
         best_score = -1
         best_model = None
         times_converged = 0
         partial_converged = 0
         iterations = 0
-        while times_converged < 1 and partial_converged < 2 and iterations < 10:
+        while times_converged < 1 and partial_converged < 5 and iterations < 15:
             # model = MLPClassifier((80, 3, 80), activation='relu', max_iter=15000, solver='adam', alpha=0, verbose=True, tol=0.0001, n_iter_no_change=500, learning_rate_init=0.002, warm_start=False, batch_size=2000)
             model = MLPClassifier((80, 3, 80), activation='relu', max_iter=40000, solver='adam', alpha=0, verbose=False, tol=0.0001, n_iter_no_change=5000, learning_rate_init=0.002, warm_start=False, batch_size=2000)
             model.fit(x_train, y_train)
@@ -155,6 +147,7 @@ class Manager:
                 best_model = model
                 best_score = score
             iterations += 1
+            # self.test_model(model, test_dimensions, None)
 
         print("best score is {}".format(best_model.score(x_train, y_train)))
         # self.test_model(best_model, dimensions, None)
@@ -162,7 +155,6 @@ class Manager:
         self.dimensions.append(dimensions)
 
     def test_model(self, model, dimensions, poly):
-        # dimensions = [0.2 * self.image_size[0], 0.55 * self.image_size[0], 0.6 * self.image_size[1], 1.0 * self.image_size[1]]
         print("testing model that has dimensions of", dimensions, [dimensions[0] / self.image_size[0], dimensions[1] / self.image_size[0], dimensions[2] / self.image_size[1], dimensions[3] / self.image_size[1]])
         t, f = [], []
         for i in range(max(0, int(dimensions[0])), int(dimensions[1])):
@@ -184,23 +176,15 @@ class Manager:
         plt.show()
 
     def test_models(self, folder_name):
-        self.load_dimensions()
-        print("dimensions loaded:", self.dimensions)
+        self.load_dimensions(folder_name)
         for model_index in range(0, len(self.clusters)):
-            print(model_index, self.dimensions[model_index], [dimension / self.image_size[i<2] for i, dimension in enumerate(self.dimensions[model_index])])
             with open(folder_name + '/model{}.pkl'.format(model_index), 'rb') as f:
                 model = pickle.load(f)
                 inside_points = []
-                outside_points = []
                 for i in range(max(0, self.dimensions[model_index][0]), min(self.dimensions[model_index][1], self.image_size[0])):
                     for k in range(max(0, self.dimensions[model_index][2]), min(self.dimensions[model_index][3], self.image_size[1])):
-                # for i in range(self.image_size[0] * 2):
-                #     for k in range(self.image_size[1] * 2):
-                        if model.predict_proba(np.array([[i / self.image_size[0], k / self.image_size[1]]]))[0][1] > 0.2:
+                        if model.predict_proba(np.array([[i / self.image_size[0], k / self.image_size[1]]]))[0][1] > 0.3:
                             inside_points.append((i / self.image_size[0], k / self.image_size[1]))
-                        else:
-                            outside_points.append((i / self.image_size[0], k / self.image_size[1]))
-                # print("excluding:", outside_points[0], outside_points[-1])
             plt.scatter([point[0] for point in inside_points], [point[1] for point in inside_points], color=[self.clusters[model_index].color[i] / 255 for i in range(3)])
             # plt.scatter([point[0] for point in outside_points], [point[1] for point in outside_points], color=[0.9, 0.9, 0.9])
         plt.show()
@@ -211,7 +195,6 @@ class Manager:
         output = output.reshape(-1, self.image_size[1])
         positive = []
         negative = []
-        print("outputted:\n", output, output.shape)
         for i in range(self.image_size[0]):
             for k in range(self.image_size[1]):
                 if output[i][k] > 0.5:
@@ -224,26 +207,41 @@ class Manager:
         plt.show()
 
     def convert_3layer_to_string(self, model, dimensions, index):
-        x_vals = "c_{{{}}}=x*{}+{}".format(index, str(list(np.round(model.coefs_[0][0], decimals=3))), str(list(np.round(model.intercepts_[0], decimals=3))))
-        y_vals = "v_{{{}}}=y*{}".format(index, str(list(np.round(model.coefs_[0][1], decimals=3))))
+        x_vals = "c_{{{}}}=x*{}+{}".format(index, str(list(np.round(model.coefs_[0][0], decimals=4))), str(list(np.round(model.intercepts_[0], decimals=4))))
+        y_vals = "v_{{{}}}=y*{}".format(index, str(list(np.round(model.coefs_[0][1], decimals=4))))
         inequality = "\\{" + "{}<x<{}".format(max(0,dimensions[0]), min(self.image_size[0],dimensions[1])) + "\\}\\{" + "{}<y<{}".format(max(0,dimensions[2]), min(self.image_size[1],dimensions[3])) + "\\}"
-        print("the inequality is", inequality)
-        total = "s(\\total({} * s((c_{{{}}} + v_{{{}}}))) + {}) > 0.5".format(str(list(np.round([arr[0] for arr in model.coefs_[1]], decimals=3))), index, index, str(np.round(model.intercepts_[1][0], decimals=3))) + inequality
+        total = "s(\\total({} * s((c_{{{}}} + v_{{{}}}))) + {}) > 0.5".format(str(list(np.round([arr[0] for arr in model.coefs_[1]], decimals=4))), index, index, str(np.round(model.intercepts_[1][0], decimals=4))) + inequality
 
-        print("equations:")
-        print("x_vals:", x_vals)
-        print("y_vals:", y_vals)
-        print("total:", total)
+        # print("equations:")
+        # print("x_vals:", x_vals)
+        # print("y_vals:", y_vals)
+        # print("total:", total)
         return x_vals, y_vals, total
     
+    # first layer: x, y
+    # second layer: w[0]x + w[1]y + b
+    # third layer: w[0]
+
     def convert_5layer_to_string(self, model, dimensions, index):
-        converted = 'conversion stuff go here'
-        return converted
+        # temporary probably:
+        dimensions = np.round(self.generate_dimensions(self.clusters[index]), decimals=4)
+        # test_dimensions = [dimensions[i] * self.image_size[i>=2] for i in range(4)]
+        # self.test_model(model, test_dimensions, None)
+        layer_1 = "n_{{{}}}=s(x*{}+y*{}+{})".format(index, str(list(np.round(model.coefs_[0][0], decimals=4))), str(list(np.round(model.coefs_[0][1], decimals=4))), str(list(np.round(model.intercepts_[0], decimals=4))))
+        layer_2 = []
+        for i in range(len(model.coefs_[1][0])):
+            layer_2.append("{}_{{{}}}=s(\\total(n_{{{}}}*{})+{})".format(chr(i+65), index, index, str(list(np.round([arr[i] for arr in model.coefs_[1]], decimals=4))), str(np.round(model.intercepts_[1][i], decimals=4))))
+
+        layer_3 = "q_{{{}}}=s({}".format(index, str(list(np.round(model.intercepts_[2], decimals=4))))
+        for i, node in enumerate(layer_2):
+            layer_3 += "+{}_{{{}}}*{}".format(node[0], index, str(list(np.round(model.coefs_[2][i], decimals=4))))
+        layer_3 += ")"
+
+        layer_4 = "s(\\total({}*q_{{{}}})+{})>0.5".format(str([np.round(coef[0], decimals=4) for coef in model.coefs_[3]]), index, str(list(np.round(model.intercepts_[3], decimals=4))))
+        inequality = "\\{" + "{}<x<{}".format(max(0,dimensions[0]), min(1,dimensions[1])) + "\\}\\{" + "{}<y<{}".format(max(0,dimensions[2]), min(1,dimensions[3])) + "\\}"
+        layer_4 += inequality
+        return layer_1, layer_2, layer_3, layer_4
     
-    def convert_index2string(self, index): # actually doesn't help at all :( thanks desmos
-        index = str(index)
-        index = "_".join(num for num in index)
-        return index
     
     def save_neural_net(self, index):
         print("attempting save")
@@ -259,6 +257,24 @@ class Manager:
 
             with open('wolf_models/dimensions', 'a') as file:
                 file.write("{},{},{},{}\n".format(self.dimensions[i][0], self.dimensions[i][1], self.dimensions[i][2], self.dimensions[i][3]))
+
+        with open("saved_wolf_equations{}.json".format(index), "w") as save_json:
+            json.dump(equations_data, save_json)
+
+
+    def save_deep_neural_net(self, index, folder_path, save_dims=True, save_pkl=True):
+        equations_data = {'equations' : []}
+        for i, model in enumerate(self.models[:]):
+            layer1, layer2_list, layer3, layer4 = self.convert_5layer_to_string(model, self.dimensions[i], i)
+            equation = {'layer1' : layer1, 'layer2list' : layer2_list, 'layer3' : layer3, 'layer4' : layer4, 'color' : self.clusters[i].color}
+            equations_data['equations'].append(equation)
+            print("saved:", i)
+
+            # with open(folder_path + '/model{}.pkl'.format(i),'wb') as file:
+            #     pickle.dump(model, file)
+
+            # with open(folder_path + '/dimensions', 'a') as file:
+            #     file.write("{},{},{},{}\n".format(self.dimensions[i][0], self.dimensions[i][1], self.dimensions[i][2], self.dimensions[i][3]))
 
         with open("saved_wolf_equations{}.json".format(index), "w") as save_json:
             json.dump(equations_data, save_json)
@@ -297,19 +313,11 @@ image = manager.recreate_image() / 255
 plt.imshow(image)
 plt.show()
 
-for cluster in manager.clusters:
-    print(len(cluster.points))
-print("total:", sum([len(cluster.points) for cluster in manager.clusters]), len(manager.clusters))
+manager.feed_clusters()
+manager.save_neural_net(2)
 
-# manager.feed_clusters()
-# manager.save_neural_net(1)
+# manager.load_dimensions("wolf_models")
+# manager.load_models("wolf_models")
+# manager.save_deep_neural_net(1, "wolf_models", False, False)
 
-manager.test_models('wolf_models')
-
-# index = 1
-# manager.load_dimensions()
-# manager.create_train_and_label([manager.clusters[index]], manager.clusters[index + 1:] + manager.clusters[:index], 1, 1)
-# f = open('wolf_models/model{}.pkl'.format(index), 'rb')
-# model = pickle.load(f)
-# manager.test_model(model, manager.dimensions[index], None)
-
+# manager.test_models('wolf_models')
